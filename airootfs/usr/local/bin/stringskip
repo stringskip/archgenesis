@@ -1,0 +1,48 @@
+#!/bin/bash
+#
+#Created by Philip Tesiorna (Stringskip).
+#
+
+if [[ -f /usr/local/bin/archgen/sharedfuncs ]]; then
+  source /usr/local/bin/archgen/sharedfuncs
+else
+  echo "missing file: sharedfuncs"
+  exit 1
+fi
+
+while true
+do
+  print_title "WELCOME TO GENESIS GNU/LINUX INSTALLER"
+  echo ${BGreen}"1)${Reset} ${Bold}"Automatic Installion of Genesis GNU/Linux Operating System"${Reset} "
+  echo ${BGreen}"2)${Reset} ${Bold}"Manual Installion of Genesis GNU/Linux Operating System"${Reset} "
+  echo ""
+  echo ${BGreen}"e)${Reset} ${Bold}"Exit the installer"${Reset} "
+  echo ""
+  read_input
+  for OPT in ${OPTION}; do
+    case "$OPT" in
+      1)
+        if [[ -f /usr/local/bin/lester ]]; then
+          source /usr/local/bin/lester
+        else
+          echo "I can't seem to find lester!"
+          exit 1
+        fi
+        ;;
+      2)
+        if [[ -f /usr/local/bin/konev ]]; then
+          source /usr/local/bin/konev
+        else
+          echo "konev is absent!"
+          exit 1
+        fi
+        ;;
+      "e")
+        exit 0
+        ;;
+      *)
+        invalid_option
+        ;;
+    esac
+  done
+done

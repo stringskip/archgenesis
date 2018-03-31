@@ -1,0 +1,80 @@
+#!/bin/bash
+#-------------------------------------------------------------------------------
+#Created by Philip Tesiorna (Stringskip).
+#-------------------------------------------------------------------------------
+
+if [[ -f /usr/local/bin/archgen/sharedfuncs ]]; then
+  source /usr/local/bin/archgen/sharedfuncs
+else
+  echo "missing file: sharedfuncs"
+  exit 1
+fi
+
+new_root_func(){
+  #Restore the configuration of journald
+  echo "############ Restoring the configuration of journald ######################"
+  sed -i 's/Storage=volatile/#Storage=auto/' /etc/systemd/journald.conf
+
+  #Remove special udev rule
+  echo "############ Removing special udev rule ###################################"
+  rm /etc/udev/rules.d/81-dhcpcd.rules
+
+  #Disable and remove the services created by archiso
+  echo "############ Disabling and removing the services created by iso ###########"
+  systemctl disable pacman-init.service choose-mirror.service
+  rm -r /etc/systemd/system/{choose-mirror.service,pacman-init.service,etc-pacman.d-gnupg.mount,getty@tty1.service.d}
+  rm /etc/systemd/scripts/choose-mirror
+
+  #Remove special scripts of the Live environment
+  echo "############ Removing special scripts of the Live environment #############"
+  rm /etc/systemd/system/getty@tty1.service.d/autologin.conf
+  rm /root/{.automated_script.sh,.zlogin}
+  rm /etc/mkinitcpio-archiso.conf
+  rm -r /etc/initcpio
+
+  #Importing archlinux keys
+  echo "############ Importing archlinux keys #####################################"
+  pacman-key --init
+  pacman-key --populate archlinux
+
+  #networking
+  echo "############ Enabling network interfaces ##################################"
+  systemctl disable dhcpcd@enp0s3.service  
+  systemctl enable dhcpcd.service
+  systemctl enable NetworkManager.service
+
+  echo "############ Configuring visudo ###########################################"
+  ## Uncomment to allow members of group wheel to execute any command
+  sed -i '/%wheel ALL=(ALL) ALL/s/^#//' /etc/sudoers
+  ## comment back this line 'Same thing without a password (not secure)
+  sed -i '/%wheel ALL=(ALL) NOPASSWD: ALL/s/^/#/' /etc/sudoers
+  ## Uncomment to allow members of group sudo to execute any command
+  sed -i '/%sudo   ALL=(ALL) ALL/s/^#//' /etc/sudoers
+
+  #comment back PAM services
+  echo "############ Disabling and removing PAM services ##########################"
+  sed -i '/pam-service=lightdm/s/^/#/' /etc/lightdm/lightdm.conf
+  sed -i '/pam-autologin-service=lightdm-autologin/s/^/#/' /etc/lightdm/lightdm.conf
+  sed -i '/pam-greeter-service=lightdm-greeter/s/^/#/' /etc/lightdm/lightdm.conf
+  sed -i '/auth        sufficient  pam_succeed_if.so user ingroup nopasswdlogin/s/^/#/' /etc/pam.d/lightdm
+  sed -i '/auth		sufficient	pam_wheel.so trust use_uid/s/^/#/' /etc/pam.d/su
+
+  echo "############ Configuring mkinitcpio #######################################"
+  mkinitcpio -p linux
+}
+
+grub_install(){
+  echo "############ installing grub bootloader ###################################"
+  if [[ $UEFI -eq 1 ]]; then
+    grub-install --target=x86_64-efi --efi-directory=${EFI_MOUNTPOINT} --bootloader-id=genesis_grub
+  else
+    #parted /dev/sdb set 1 bios_grub on
+    grub-install ${BOOT_MOUNTPOINT}
+  fi
+  grub-mkconfig -o /boot/grub/grub.cfg
+}
+
+new_root_func
+grub_install
+exit
+

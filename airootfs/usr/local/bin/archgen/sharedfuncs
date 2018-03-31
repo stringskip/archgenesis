@@ -1,0 +1,272 @@
+#!/bin/bash
+#-------------------------------------------------------------------------------
+#Created by helmuthdu mailto: helmuthdu[at]gmail[dot]com
+#Contribution: flexiondotorg
+#Modified by Philip Tesiorna
+#
+
+#GLOBAL VARIABLES {{{
+  checklist=( 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 )
+  # COLORS {{{
+    Bold=$(tput bold)
+    Underline=$(tput sgr 0 1)
+    Reset=$(tput sgr0)
+    # Regular Colors
+    Red=$(tput setaf 1)
+    Green=$(tput setaf 2)
+    Yellow=$(tput setaf 3)
+    Blue=$(tput setaf 4)
+    Purple=$(tput setaf 5)
+    Cyan=$(tput setaf 6)
+    White=$(tput setaf 7)
+    # Bold
+    BRed=${Bold}${Red}
+    BGreen=${Bold}${Green}
+    BYellow=${Bold}${Yellow}
+    BBlue=${Bold}${Blue}
+    BPurple=${Bold}${Purple}
+    BCyan=${Bold}${Cyan}
+    BWhite=${Bold}${White}
+  #}}}
+  # PROMPT {{{
+    prompt1="Enter your option: "
+  #}}}
+  # MOUNTPOINTS {{{
+    EFI_MOUNTPOINT="/boot/efi"
+    MOUNTPOINT="/mnt"
+    BOOT_MOUNTPOINT="/dev/sda"
+    BOOT_PARTITION="/dev/sda1"
+    SWAP_MOUNTPOINT="/dev/sda2"
+    ROOT_MOUNTPOINT="/dev/sda3"
+  #}}}
+  ARCHI=`uname -m` # ARCHITECTURE
+  UEFI=0
+  EXTERNAL=`echo -e "(${BYellow}external${Reset})"`
+  AUTOMATIC_MODE=0
+  TRIM=0
+#}}}
+#COMMON FUNCTIONS {{{
+  error_msg() { #{{{
+    local _msg="${1}"
+    echo -e "${_msg}"
+    exit 1
+  } #}}}
+  cecho() { #{{{
+    echo -e "$1"
+    echo -e "$1" >>"$LOG"
+    tput sgr0;
+  } #}}}
+  ncecho() { #{{{
+    echo -ne "$1"
+    echo -ne "$1" >>"$LOG"
+    tput sgr0
+  } #}}}
+  check_boot_system() { #{{{
+    if [[ "$(cat /sys/class/dmi/id/sys_vendor)" == 'Apple Inc.' ]] || [[ "$(cat /sys/class/dmi/id/sys_vendor)" == 'Apple Computer, Inc.' ]]; then
+      modprobe -r -q efivars || true  # if MAC
+    else
+      modprobe -q efivarfs            # all others
+    fi
+    if [[ -d "/sys/firmware/efi/" ]]; then
+      ## Mount efivarfs if it is not already mounted
+      if [[ -z $(mount | grep /sys/firmware/efi/efivars) ]]; then
+        mount -t efivarfs efivarfs /sys/firmware/efi/efivars
+      fi
+      UEFI=1
+      echo "UEFI Mode detected"
+    else
+      UEFI=0
+      echo "BIOS Mode detected"
+    fi
+  }
+  #}}}
+  check_trim() { #{{{
+    [[ -n $(hdparm -I /dev/sda | grep TRIM 2> /dev/null) ]] && TRIM=1
+  }
+  #}}}
+  read_input() { #{{{
+    if [[ $AUTOMATIC_MODE -eq 1 ]]; then
+      OPTION=$1
+    else
+      read -p "$prompt1" OPTION
+    fi
+  } #}}}
+  read_input_text() { #{{{
+    if [[ $AUTOMATIC_MODE -eq 1 ]]; then
+      OPTION=$2
+    else
+      read -p "$1 [y/N]: " OPTION
+      echo ""
+    fi
+    OPTION=`echo "$OPTION" | tr '[:upper:]' '[:lower:]'`
+  } #}}}
+  read_input_options() { #{{{
+    local line
+    local packages
+    if [[ $AUTOMATIC_MODE -eq 1 ]]; then
+      array=("$1")
+    else
+      read -p "$prompt2" OPTION
+      array=("$OPTION")
+    fi
+    for line in ${array[@]/,/ }; do
+      if [[ ${line/-/} != $line ]]; then
+        for ((i=${line%-*}; i<=${line#*-}; i++)); do
+          packages+=($i);
+        done
+      else
+        packages+=($line)
+      fi
+    done
+    OPTIONS=("${packages[@]}")
+  } #}}}
+  print_line() { #{{{
+    printf "%$(tput cols)s\n"|tr ' ' '-'
+  } #}}}
+  print_title() { #{{{
+    clear
+    print_line
+    echo -e "# ${Bold}$1${Reset}"
+    print_line
+    echo ""
+  } #}}}
+  print_info() { #{{{
+    #Console width number
+    T_COLS=`tput cols`
+    echo -e "${Bold}$1${Reset}\n" | fold -sw $(( $T_COLS - 18 )) | sed 's/^/\t/'
+  } #}}}
+  print_warning() { #{{{
+    T_COLS=`tput cols`
+    echo -e "${BYellow}$1${Reset}\n" | fold -sw $(( $T_COLS - 1 ))
+  } #}}}
+  print_danger() { #{{{
+    T_COLS=`tput cols`
+    echo -e "${BRed}$1${Reset}\n" | fold -sw $(( $T_COLS - 1 ))
+  } #}}}
+  contains_element() { #{{{
+    #check if an element exist in a string
+    for e in "${@:2}"; do [[ $e == $1 ]] && break; done;
+  } #}}}
+  pause_function() { #{{{
+    print_line
+    if [[ $AUTOMATIC_MODE -eq 0 ]]; then
+      read -e -sn 1 -p "Press enter to continue..."
+    fi
+  } #}}}
+  invalid_option() { #{{{
+    print_line
+    echo "Invalid option. Try another one."
+  } #}}}
+  arch_chroot() { #{{{
+    arch-chroot $MOUNTPOINT /bin/bash -c "${1}"
+  }
+
+#UMOUNT PARTITIONS
+umount_partitions(){
+  mounted_partitions=(`lsblk | grep ${MOUNTPOINT} | awk '{print $7}' | sort -r`)
+  swapoff -a
+  for i in ${mounted_partitions[@]}; do
+    umount $i
+  done
+}
+
+#INSTALL BASE SYSTEM
+install_base_system(){
+  print_title "INSTALLING GENESIS GNU/LINUX IN THE SYSTEM"
+  print_info "This will install Genesis GNU/Linux in your system permanently so you can you use it even without this live CD. This may take a while, Please be patient."
+  
+  #simulate a long process
+
+  ##method1
+  time gencp -gax / /mnt 
+
+  ##method2
+  #mkdir /tmp/genlive
+  #mount -t squashfs /run/archiso/bootmnt/genesis/x86_64/airootfs.sfs /tmp/genlive
+  #gencp -gax /tmp/genlive/. /mnt
+
+  ##method3
+  #unsquashfs -f -d /mnt /run/archiso/bootmnt/genesis/x86_64/airootfs.sfs
+  
+  echo " "
+
+  [[ $? -ne 0 ]] && error_msg "Installing base system to ${MOUNTPOINT} failed. Check error messages above."
+
+  #Then, copy the kernel image to the new root, in order to keep the integrity of the new system:
+  echo "############ copying the kernel image to the new root ###################"
+  gencp -gvaT /run/archiso/bootmnt/genesis/boot/$(uname -m)/vmlinuz ${MOUNTPOINT}/boot/vmlinuz-linux
+
+  #Generate an fstab file
+  echo "############ Generating fstab file ######################################"
+  configure_fstab
+
+  #Chroot and configure the base system
+  chmod +x ${MOUNTPOINT}/usr/local/bin/archgen/chrootFiles/*
+  echo "############ chrooting to the new root###################################"
+  arch-chroot ${MOUNTPOINT} /usr/local/bin/archgen/chrootFiles/newRoot
+  pause_function
+}
+
+#CONFIGURE FSTAB {{{
+configure_fstab(){
+  if [[ $UEFI -eq 1 ]]; then
+    genfstab -t PARTUUID -p ${MOUNTPOINT} >> ${MOUNTPOINT}/etc/fstab
+  else
+    genfstab -U -p ${MOUNTPOINT} >> ${MOUNTPOINT}/etc/fstab
+  fi
+  fstab=$OPT
+}
+
+#CONFIGURE HOSTNAME
+configure_hostname(){
+  print_info "A host name is a unique name created to identify a machine on a network.Host names are restricted to alphanumeric characters.\nThe hyphen (-) can be used, but a host name cannot start or end with it. Length is restricted to 63 characters."
+  read -p "Hostname [ex: genesis]: " host_name
+  echo "$host_name" > ${MOUNTPOINT}/etc/hostname
+  arch_chroot "sed -i '/127.0.0.1/s/$/ '${host_name}'/' /etc/hosts"
+  arch_chroot "sed -i '/::1/s/$/ '${host_name}'/' /etc/hosts"
+  arch_chroot "hwclock --systohc"
+}
+
+#ROOT PASSWORD 
+root_password(){
+  print_info "Configure the new root password for the system"
+  print_warning "Enter your new root password"
+  arch-chroot ${MOUNTPOINT} /usr/local/bin/archgen/chrootFiles/rootpw
+}
+
+#CREATE NEW USER 
+create_new_user(){
+  print_info "Create a new username and password of this system to be used by default instead of the root account"
+  arch-chroot ${MOUNTPOINT} /usr/local/bin/archgen/chrootFiles/createUser
+}
+
+#CLEANUP
+cleaning_up(){
+  echo "############ Final Cleanup ##############################################"
+  rm -rf /mnt/usr/local/bin/archgen
+  rm -f /mnt/usr/local/bin/lester
+  rm -f /mnt/usr/local/bin/konev
+  rm -f /mnt/usr/local/bin/stringskip
+  rm -f /mnt/usr/share/applications/genesis-installer.desktop
+  rm -f /mnt/root/.bash_history
+  rm -f /mnt/home/genesis/.bash_history
+  rm -rf /tmp/*
+}
+
+#FINISH 
+finish(){
+  print_info "Installation is successfull. You can now reboot to your newly installed Genesis GNU/Linux operating system and enjoy it."
+  read_input_text "Reboot system"
+  if [[ $OPTION == y ]]; then
+    cleaning_up
+    echo "############ Unmounting partitions ####################################"
+    umount_partitions
+    echo "############ Rebooting ################################################"
+    reboot
+  fi
+  cleaning_up
+  echo "############ Unmounting partitions ####################################"
+  umount_partitions
+  echo "Done!"
+  exit 0
+}

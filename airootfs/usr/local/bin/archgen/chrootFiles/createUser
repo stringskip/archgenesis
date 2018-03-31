@@ -1,0 +1,15 @@
+#!/bin/bash
+#-------------------------------------------------------------------------------
+#Created by Philip Tesiorna.
+#-------------------------------------------------------------------------------
+
+read -p "Username: " username
+useradd -m -g users -G wheel -s /bin/bash ${username}
+passwd ${username}
+while [[ $? -ne 0 ]]; do
+  passwd ${username}
+done
+userdel -r genesis
+groupdel -f autologin
+groupdel -f nopasswdlogin
+exit

@@ -1,0 +1,249 @@
+#!/bin/bash
+#-------------------------------------------------------------------------------
+#Created by helmuthdu mailto
+#Modified by Philip Tesiorna (Stringskip).
+#-------------------------------------------------------------------------------
+
+if [[ -f /usr/local/bin/archgen/sharedfuncs ]]; then
+  source /usr/local/bin/archgen/sharedfuncs
+else
+  echo "missing file: sharedfuncs"
+  exit 1
+fi
+
+#SELECT DEVICE
+select_device(){
+  print_info "Select the device where Genesis GNU/Linux will be installed"
+  devices_list=(`lsblk -d | awk '{print "/dev/" $1}' | grep 'sd\|hd\|vd\|nvme\|mmcblk'`);
+  PS3="$prompt1"
+  echo -e "Attached Devices:\n"
+  lsblk -lnp -I 2,3,8,9,22,34,56,57,58,65,66,67,68,69,70,71,72,91,128,129,130,131,132,133,134,135,259 | awk '{print $1,$4,$6,$7}'| column -t
+  echo -e "\n"
+  echo -e "Select device to partition:\n"
+  select device in "${devices_list[@]}"; do
+    if contains_element "${device}" "${devices_list[@]}"; then
+      break
+    else
+      invalid_option
+    fi
+  done
+  BOOT_MOUNTPOINT=$device
+}
+
+#SETUP PARTITION{{{
+create_partition(){
+  apps_list=("cfdisk" "cgdisk" "fdisk" "gdisk" "parted");
+  PS3="$prompt1"
+  echo -e "Select partition program:"
+  select OPT in "${apps_list[@]}"; do
+    if contains_element "$OPT" "${apps_list[@]}"; then
+      select_device
+      case $OPT in
+        parted)
+          parted -a opt ${device}
+          ;;
+        *)
+          $OPT ${device}
+          ;;
+      esac
+      break
+    else
+      invalid_option
+    fi
+  done
+  pause_function
+}
+
+#SELECT|FORMAT PARTITIONS
+format_partitions(){
+  print_info "This step will select and format the selected partition where Genesis GNU/Linux will be installed"
+  print_danger "\tAll data on the PARTITION will be LOST."
+  i=0
+
+  block_list=(`lsblk | grep 'part\|lvm' | awk '{print substr($1,3)}'`)
+
+  # check if there is no partition
+  if [[ ${#block_list[@]} -eq 0 ]]; then
+    echo "No partition found"
+    exit 0
+  fi
+
+  partitions_list=()
+  for OPT in ${block_list[@]}; do
+    check_lvm=`echo $OPT | grep lvm`
+    if [[ -z $check_lvm ]]; then
+      partitions_list+=("/dev/$OPT")
+    else
+      partitions_list+=("/dev/mapper/$OPT")
+    fi
+  done
+
+  # partitions based on boot system
+  if [[ $UEFI -eq 1 ]]; then
+    partition_name=("root" "EFI" "swap" "another")
+  else
+    partition_name=("root" "swap" "another")
+  fi
+
+  disable_partition(){
+    #remove the selected partition from list
+    unset partitions_list[${partition_number}]
+    partitions_list=(${partitions_list[@]})
+    #increase i
+    [[ ${partition_name[i]} != another ]] && i=$(( i + 1 ))
+  }
+
+  format_partition(){
+    read_input_text "Confirm format $1 partition"
+    if [[ $OPTION == y ]]; then
+      [[ -z $3 ]] && filesystem="ext4"
+      mkfs.${filesystem} $1 \
+        $([[ $TRIM -eq 1 && ${filesystem} == ext4 ]] && echo "-E discard")
+      fsck $1
+      mkdir -p $2
+      mount -t ${filesystem} $1 $2
+      disable_partition
+    fi
+  }
+
+  format_swap_partition(){
+    read_input_text "Confirm format $1 partition"
+    if [[ $OPTION == y ]]; then
+      mkswap $1
+      swapon $1
+      disable_partition
+    fi
+  }
+
+  create_swap(){
+    swap_options=("partition" "skip");
+    PS3="$prompt1"
+    echo -e "Select ${BYellow}${partition_name[i]}${Reset} filesystem:\n"
+    select OPT in "${swap_options[@]}"; do
+      case "$REPLY" in
+        1)
+          select partition in "${partitions_list[@]}"; do
+            #get the selected number - 1
+            partition_number=$(( $REPLY - 1 ))
+            if contains_element "${partition}" "${partitions_list[@]}"; then
+              format_swap_partition "${partition}"
+            fi
+            break
+          done
+          swap_type="partition"
+          break
+          ;;
+        2)
+          i=$(( i + 1 ))
+          swap_type="none"
+          break
+          ;;
+        *)
+          invalid_option
+          ;;
+      esac
+    done
+  }
+
+  check_mountpoint(){
+    if mount | grep $2; then
+      echo "Successfully mounted"
+      disable_partition "$1"
+    else
+      echo "WARNING: Not Successfully mounted"
+    fi
+  }
+
+  set_efi_partition(){
+    efi_options=("/boot/efi" "/boot")
+    PS3="$prompt1"
+    echo -e "Select EFI mountpoint:\n"
+    select EFI_MOUNTPOINT in "${efi_options[@]}"; do
+      if contains_element "${EFI_MOUNTPOINT}" "${efi_options[@]}"; then
+        break
+      else
+        invalid_option
+      fi
+    done
+  }
+
+  while true; do
+    PS3="$prompt1"
+    if [[ ${partition_name[i]} == swap ]]; then
+      create_swap
+    else
+      echo -e "Select ${BYellow}${partition_name[i]}${Reset} partition:\n"
+      select partition in "${partitions_list[@]}"; do
+        #get the selected number - 1
+        partition_number=$(( $REPLY - 1 ))
+        if contains_element "${partition}" "${partitions_list[@]}"; then
+          case ${partition_name[i]} in
+            root)
+              ROOT_PART=`echo ${partition} | sed 's/\/dev\/mapper\///' | sed 's/\/dev\///'`
+              ROOT_MOUNTPOINT=${partition}
+              format_partition "${partition}" "${MOUNTPOINT}"
+              ;;
+            EFI)
+              set_efi_partition
+              read_input_text "Format ${partition} partition"
+              if [[ $OPTION == y ]]; then
+                format_partition "${partition}" "${MOUNTPOINT}${EFI_MOUNTPOINT}" vfat
+              else
+                mkdir -p "${MOUNTPOINT}${EFI_MOUNTPOINT}"
+                mount -t vfat "${partition}" "${MOUNTPOINT}${EFI_MOUNTPOINT}"
+                check_mountpoint "${partition}" "${MOUNTPOINT}${EFI_MOUNTPOINT}"
+              fi
+              ;;
+            another)
+              read -p "Mountpoint [ex: /home]:" directory
+              [[ $directory == "/boot" ]] && BOOT_MOUNTPOINT=`echo ${partition} | sed 's/[0-9]//'`
+              read_input_text "Format ${partition} partition"
+              if [[ $OPTION == y ]]; then
+                format_partition "${partition}" "${MOUNTPOINT}${directory}" "${filesystem}"
+              else
+                read_input_text "Confirm fs="${filesystem}" part="${partition}" dir="${directory}""
+                if [[ $OPTION == y ]]; then
+                  mkdir -p ${MOUNTPOINT}${directory}
+                  mount -t ${filesystem} ${partition} ${MOUNTPOINT}${directory}
+                  check_mountpoint "${partition}" "${MOUNTPOINT}${directory}"
+                fi
+              fi
+              ;;
+          esac
+          break
+        else
+          invalid_option
+        fi
+      done
+    fi
+    #check if there is no partitions left
+    if [[ ${#partitions_list[@]} -eq 0 && ${partition_name[i]} != swap ]]; then
+      break
+    elif [[ ${partition_name[i]} == another ]]; then
+      read_input_text "Configure more partitions"
+      [[ $OPTION != y ]] && break
+    fi
+  done
+}
+
+check_boot_system
+check_trim
+
+while true
+do
+  print_warning "You choose the manual installer of GENESIS GNU/Linux"
+  print_info "This method will install the Genesis GNU/Linux in your system with user intervention for every steps. This method is for advance users. you can always return to the main menu and choose the automatic method to let the installer do it for you instead"
+  read_input_text "Proceed?"
+  if [[ $OPTION == y ]]; then
+    umount_partitions
+    create_partition
+    format_partitions
+    install_base_system
+    configure_hostname
+    root_password
+    create_new_user
+    finish
+  else
+    source /usr/local/bin/stringskip
+  fi
+done

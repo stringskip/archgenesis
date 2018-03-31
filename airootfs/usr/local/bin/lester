@@ -1,0 +1,82 @@
+#!/bin/bash
+#-------------------------------------------------------------------------------
+#Created by helmuthdu mailto
+#Modified by Philip Tesiorna (Stringskip).
+#-------------------------------------------------------------------------------
+
+if [[ -f /usr/local/bin/archgen/sharedfuncs ]]; then
+  source /usr/local/bin/archgen/sharedfuncs
+else
+  echo "missing file: sharedfuncs"
+  exit 1
+fi
+
+#Remove each partition
+dell_all_part(){
+  for v_partition in $(parted -s ${BOOT_MOUNTPOINT} print|awk '/^ / {print $1}')
+  do
+      parted -s ${BOOT_MOUNTPOINT} rm ${v_partition}
+  done
+  echo "############ All partitions in the drive successfully removed ###########"
+}
+
+#Create 3 partitions (root, boot and swap)
+create_part(){
+cat <<EOF | fdisk ${BOOT_MOUNTPOINT}
+n
+p
+1
+
++300M
+n
+p
+2
+
++4G
+n
+p
+3
+
+
+a
+3
+t
+2
+82
+w
+EOF
+
+yes | mkfs.ext4 ${BOOT_PARTITION}
+yes | mkfs.ext4 ${ROOT_MOUNTPOINT}
+mkswap ${SWAP_MOUNTPOINT}
+mount -v ${ROOT_MOUNTPOINT} ${MOUNTPOINT}
+mkdir ${MOUNTPOINT}/boot
+mount -v ${BOOT_PARTITION} ${MOUNTPOINT}/boot
+swapon ${SWAP_MOUNTPOINT}
+echo "############ Successfully created the partitions ##########################"
+}
+
+check_boot_system
+check_trim
+
+while true
+do
+  print_warning "You choose the automatic installer of GENESIS GNU/Linux "
+  print_danger "This will automatically erase all the partition of the first hard drive, data will be lost. Please check and make sure this is really the partition intended for the installation!"
+  read_input_text "Continue"
+  if [[ $OPTION == y ]]; then
+    echo "Thats it for now, we will now proceed on installing the system"
+    echo "We may require your basic information after the installation"
+    umount_partitions
+    dell_all_part
+    create_part
+    install_base_system
+    configure_hostname
+    root_password
+    create_new_user
+    finish
+  else
+    source /usr/local/bin/stringskip
+  fi
+done
+
